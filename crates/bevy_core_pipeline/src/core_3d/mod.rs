@@ -378,6 +378,8 @@ impl PhaseItem for Transparent3d {
     // NOTE: Values increase towards the camera. Back-to-front ordering for transparent means we need an ascending sort.
     type SortKey = FloatOrd;
 
+    const AUTOMATIC_BATCHING: bool = false;
+
     #[inline]
     fn entity(&self) -> Entity {
         self.entity
