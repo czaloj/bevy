@@ -109,9 +109,14 @@ impl<I: PhaseItem> RenderPhase<I> {
 
         let mut index = 0;
         while index < items.len() {
-            bevy_log::info!("Rendering {} out of {}", index + 1, items.len());
             let item = &items[index];
             let batch_range = item.batch_range();
+            bevy_log::info!(
+                "Rendering {} out of {} for {} items",
+                index + 1,
+                items.len(),
+                batch_range.len()
+            );
             if batch_range.is_empty() {
                 index += 1;
             } else {
