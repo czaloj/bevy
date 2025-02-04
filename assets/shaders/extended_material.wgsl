@@ -1,3 +1,4 @@
+
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::alpha_discard,

@@ -1,13 +1,14 @@
 //! A shader that renders a mesh multiple times in one draw call.
 
 use bevy::{
-    core_pipeline::core_3d::Transparent3d,
+    core_pipeline::{core_3d::Transparent3d, prepass::DepthPrepass},
     ecs::{
-        query::QueryItem,
+        query::{QueryItem, ROQueryItem},
         system::{lifetimeless::*, SystemParamItem},
     },
     pbr::{
-        MeshPipeline, MeshPipelineKey, RenderMeshInstances, SetMeshBindGroup, SetMeshViewBindGroup,
+        MeshPipeline, MeshPipelineKey, PreprocessBindGroup, PreprocessPipeline,
+        RenderMeshInstances, SetMeshBindGroup, SetMeshViewBindGroup,
     },
     prelude::*,
     render::{
@@ -58,10 +59,12 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     ));
 
     // camera
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(0.0, 0.0, 15.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ..default()
-    });
+    commands
+        .spawn(Camera3dBundle {
+            transform: Transform::from_xyz(0.0, 0.0, 15.0).looking_at(Vec3::ZERO, Vec3::Y),
+            ..default()
+        })
+        .insert(DepthPrepass);
 }
 
 #[derive(Component, Deref)]
@@ -199,7 +202,9 @@ impl SpecializedMeshPipeline for CustomPipeline {
         key: Self::Key,
         layout: &MeshVertexBufferLayoutRef,
     ) -> Result<RenderPipelineDescriptor, SpecializedMeshPipelineError> {
-        let mut descriptor = self.mesh_pipeline.specialize(key, layout)?;
+        info!("Key: {:?}", key);
+        let prepass_key = key | MeshPipelineKey::DEPTH_PREPASS;
+        let mut descriptor = self.mesh_pipeline.specialize(prepass_key, layout)?;
 
         descriptor.vertex.shader = self.shader.clone();
         descriptor.vertex.buffers.push(VertexBufferLayout {
@@ -233,18 +238,44 @@ type DrawCustom = (
 struct DrawMeshInstanced;
 
 impl<P: PhaseItem> RenderCommand<P> for DrawMeshInstanced {
-    type Param = (SRes<RenderAssets<GpuMesh>>, SRes<RenderMeshInstances>);
-    type ViewQuery = ();
+    type Param = (
+        SRes<RenderAssets<GpuMesh>>,
+        SRes<RenderMeshInstances>,
+        SRes<PipelineCache>,
+        Option<SRes<PreprocessPipeline>>,
+    );
+    type ViewQuery = Has<PreprocessBindGroup>;
     type ItemQuery = Read<InstanceBuffer>;
 
     #[inline]
     fn render<'w>(
         item: &P,
-        _view: (),
+        has_preprocess_bind_group: ROQueryItem<Self::ViewQuery>,
         instance_buffer: Option<&'w InstanceBuffer>,
-        (meshes, render_mesh_instances): SystemParamItem<'w, '_, Self::Param>,
+        (meshes, render_mesh_instances, pipeline_cache, preprocess_pipeline): SystemParamItem<
+            'w,
+            '_,
+            Self::Param,
+        >,
         pass: &mut TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
+        // If we're using GPU preprocessing, then we're dependent on that
+        // compute shader having been run, which of course can only happen if
+        // it's compiled. Otherwise, our mesh instance data won't be present.
+        if let Some(preprocess_pipeline) = preprocess_pipeline {
+            if !has_preprocess_bind_group
+                || !preprocess_pipeline
+                    .pipeline_id
+                    .is_some_and(|preprocess_pipeline_id| {
+                        pipeline_cache
+                            .get_compute_pipeline(preprocess_pipeline_id)
+                            .is_some()
+                    })
+            {
+                return RenderCommandResult::Failure;
+            }
+        }
+
         let Some(mesh_instance) = render_mesh_instances.render_mesh_queue_data(item.entity())
         else {
             return RenderCommandResult::Failure;
